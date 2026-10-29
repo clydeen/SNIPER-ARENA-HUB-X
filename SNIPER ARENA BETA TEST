@@ -1,0 +1,579 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local CoreGui = game:GetService("CoreGui")
+
+local player = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
+
+-- Settings
+local Settings = {
+    Aimbot = false,
+    ESP = false,
+    FOVSize = 150,
+    FOVOffsetX = 0,
+    FOVOffsetY = 0,
+    ShowFOV = false,
+    TeamCheck = true,
+    AimBtnLocked = false
+}
+
+local aiming = false
+local currentTarget = nil
+local ESP_Objects = {} -- Now uses Instance models as keys for better cleanup
+local activeBots = {}  -- Cache for NPCs
+
+local iosBlue = Color3.fromRGB(10, 132, 255)
+local glassGrey = Color3.fromRGB(50, 50, 55)
+local glassDark = Color3.fromRGB(20, 20, 25)
+
+-- GUI Setup
+local gui = Instance.new("ScreenGui")
+gui.Name = "ClydeHubX_Sniper"
+gui.ResetOnSpawn = false
+
+local success, _ = pcall(function() gui.Parent = CoreGui end)
+if not success then gui.Parent = player:WaitForChild("PlayerGui") end
+
+-- Utilities
+local function applyGlass(obj, radius, hasGradient)
+    local corner = Instance.new("UICorner", obj)
+    corner.CornerRadius = UDim.new(0, radius)
+    
+    local stroke = Instance.new("UIStroke", obj)
+    stroke.Thickness = 1
+    stroke.Color = Color3.fromRGB(255, 255, 255)
+    stroke.Transparency = 0.85
+
+    if hasGradient then
+        local grad = Instance.new("UIGradient", obj)
+        grad.Rotation = 45
+        grad.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(200, 200, 200))
+        })
+    end
+end
+
+-- Topbar
+local topBar = Instance.new("Frame")
+topBar.Size = UDim2.new(0, 260, 0, 40)
+topBar.Position = UDim2.new(0.5, -130, 0.1, 0)
+topBar.BackgroundColor3 = glassDark
+topBar.BackgroundTransparency = 0.35
+topBar.BorderSizePixel = 0
+topBar.Active = true
+topBar.Parent = gui
+applyGlass(topBar, 14, false)
+
+local title = Instance.new("TextLabel", topBar)
+title.Size = UDim2.new(1, -40, 1, 0)
+title.Position = UDim2.new(0, 15, 0, 0)
+title.Text = "CLYDE HUBX (BETA)"
+title.Font = Enum.Font.GothamSemibold
+title.TextSize = 13
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.BackgroundTransparency = 1
+title.TextXAlignment = Enum.TextXAlignment.Left
+
+local minBtn = Instance.new("TextButton", topBar)
+minBtn.Size = UDim2.new(0, 30, 0, 30)
+minBtn.Position = UDim2.new(1, -35, 0, 5)
+minBtn.Text = "—"
+minBtn.Font = Enum.Font.GothamMedium
+minBtn.TextSize = 16
+minBtn.BackgroundTransparency = 1
+minBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+
+-- Minimized Toggle
+local openCircle = Instance.new("TextButton")
+openCircle.Size = UDim2.new(0, 45, 0, 45)
+openCircle.Position = UDim2.new(0.5, -22, 0.1, 0)
+openCircle.BackgroundColor3 = glassDark
+openCircle.BackgroundTransparency = 0.35
+openCircle.Text = "CX"
+openCircle.Font = Enum.Font.GothamSemibold
+openCircle.TextSize = 16
+openCircle.TextColor3 = Color3.fromRGB(255, 255, 255)
+openCircle.Visible = false
+openCircle.Active = true
+openCircle.Parent = gui
+Instance.new("UICorner", openCircle).CornerRadius = UDim.new(1, 0)
+
+local circleStroke = Instance.new("UIStroke", openCircle)
+circleStroke.Thickness = 1.5
+circleStroke.Color = Color3.fromRGB(255, 255, 255)
+local rgbGradient = Instance.new("UIGradient", circleStroke)
+rgbGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(10, 132, 255)),
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(162, 0, 255)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 132, 255))
+})
+
+-- Main Frame (Expanded to fit new sliders)
+local bodyFrame = Instance.new("Frame", topBar)
+bodyFrame.Size = UDim2.new(1, 0, 0, 280) 
+bodyFrame.Position = UDim2.new(0, 0, 1, 8) 
+bodyFrame.BackgroundColor3 = glassDark
+bodyFrame.BackgroundTransparency = 0.35
+bodyFrame.BorderSizePixel = 0
+bodyFrame.Active = true
+applyGlass(bodyFrame, 14, false)
+
+-- Components
+local function createHalfButton(name, xOffset, yPos, text, isFull)
+    local btn = Instance.new("TextButton", bodyFrame)
+    btn.Name = name
+    btn.Size = isFull and UDim2.new(0.9, 0, 0, 30) or UDim2.new(0.425, 0, 0, 30)
+    btn.Position = UDim2.new(xOffset, 0, 0, yPos)
+    btn.Text = text
+    btn.Font = Enum.Font.GothamMedium
+    btn.TextSize = 11
+    btn.BackgroundColor3 = glassGrey
+    btn.BackgroundTransparency = 0.5
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    applyGlass(btn, 10, false)
+    return btn
+end
+
+local aimbotBtn = createHalfButton("AimbotBtn", 0.05, 12, "Aimbot: OFF", false)
+local espBtn = createHalfButton("EspBtn", 0.525, 12, "X-Ray ESP: OFF", false)
+local fovBtn = createHalfButton("FovBtn", 0.05, 48, "Show FOV: OFF", false)
+local teamBtn = createHalfButton("TeamBtn", 0.525, 48, "Team Check: ON", false)
+local lockBtn = createHalfButton("LockBtn", 0.05, 84, "Lock Aim Btn: OFF", true)
+
+local function createSlider(yPos, text, defaultScale, callback)
+    local sliderLabel = Instance.new("TextLabel", bodyFrame)
+    sliderLabel.Size = UDim2.new(0.9, 0, 0, 15)
+    sliderLabel.Position = UDim2.new(0.05, 0, 0, yPos)
+    sliderLabel.BackgroundTransparency = 1
+    sliderLabel.Text = text
+    sliderLabel.Font = Enum.Font.GothamMedium
+    sliderLabel.TextSize = 11
+    sliderLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+
+    local sliderBg = Instance.new("Frame", bodyFrame)
+    sliderBg.Size = UDim2.new(0.9, 0, 0, 6)
+    sliderBg.Position = UDim2.new(0.05, 0, 0, yPos + 18)
+    sliderBg.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    sliderBg.BackgroundTransparency = 0.6
+    Instance.new("UICorner", sliderBg).CornerRadius = UDim.new(1, 0)
+
+    local sliderFill = Instance.new("Frame", sliderBg)
+    sliderFill.Size = UDim2.new(defaultScale, 0, 1, 0) 
+    sliderFill.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    Instance.new("UICorner", sliderFill).CornerRadius = UDim.new(1, 0)
+
+    local sliderKnob = Instance.new("TextButton", sliderBg)
+    sliderKnob.Size = UDim2.new(0, 18, 0, 18)
+    sliderKnob.Position = UDim2.new(defaultScale, -9, 0.5, -9)
+    sliderKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    sliderKnob.Text = ""
+    Instance.new("UICorner", sliderKnob).CornerRadius = UDim.new(1, 0)
+    
+    local shadow = Instance.new("UIStroke", sliderKnob)
+    shadow.Color = Color3.fromRGB(0, 0, 0)
+    shadow.Transparency = 0.85
+    shadow.Thickness = 2
+
+    local draggingSlider = false
+    sliderKnob.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            draggingSlider = true
+        end
+    end)
+    UIS.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            draggingSlider = false
+        end
+    end)
+    UIS.InputChanged:Connect(function(input)
+        if draggingSlider and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local relativeX = math.clamp((input.Position.X - sliderBg.AbsolutePosition.X) / sliderBg.AbsoluteSize.X, 0, 1)
+            sliderKnob.Position = UDim2.new(relativeX, -9, 0.5, -9)
+            sliderFill.Size = UDim2.new(relativeX, 0, 1, 0)
+            callback(relativeX)
+        end
+    end)
+end
+
+-- Visuals & Inputs
+local fovCircle = Instance.new("Frame", gui)
+fovCircle.AnchorPoint = Vector2.new(0.5, 0.5)
+fovCircle.Position = UDim2.new(0.5, 0, 0.5, 0)
+fovCircle.Size = UDim2.new(0, Settings.FOVSize * 2, 0, Settings.FOVSize * 2)
+fovCircle.BackgroundTransparency = 1
+fovCircle.Visible = false
+Instance.new("UICorner", fovCircle).CornerRadius = UDim.new(1, 0)
+local fovStroke = Instance.new("UIStroke", fovCircle)
+fovStroke.Color = Color3.fromRGB(255, 255, 255)
+fovStroke.Thickness = 1
+fovStroke.Transparency = 0.5
+
+local function makeDraggable(touchTarget, moveTarget)
+    local dragging, dragInput, dragStart, startPos
+    touchTarget.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = moveTarget.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    touchTarget.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+    UIS.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            moveTarget.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+end
+
+makeDraggable(topBar, topBar)
+makeDraggable(bodyFrame, topBar)
+makeDraggable(openCircle, openCircle)
+
+local aimTrigger = Instance.new("TextLabel", gui)
+aimTrigger.Size = UDim2.new(0, 70, 0, 70)
+aimTrigger.Position = UDim2.new(0.75, 0, 0.6, 0)
+aimTrigger.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+aimTrigger.BackgroundTransparency = 0.5
+aimTrigger.Text = "AIM"
+aimTrigger.Font = Enum.Font.GothamSemibold
+aimTrigger.TextColor3 = Color3.fromRGB(255, 255, 255)
+aimTrigger.TextTransparency = 0
+aimTrigger.TextSize = 14
+aimTrigger.Active = false
+applyGlass(aimTrigger, 35, true)
+
+-- Sliders
+createSlider(125, "FOV Size", 0.22, function(value)
+    Settings.FOVSize = 50 + (value * 450)
+    fovCircle.Size = UDim2.new(0, Settings.FOVSize * 2, 0, Settings.FOVSize * 2)
+end)
+
+createSlider(155, "Aim Button Size", 0.1875, function(value)
+    local newSize = 40 + (value * 160)
+    aimTrigger.Size = UDim2.new(0, newSize, 0, newSize)
+    aimTrigger.TextSize = math.clamp(newSize / 6, 8, 24)
+    if aimTrigger:FindFirstChild("UICorner") then
+        aimTrigger.UICorner.CornerRadius = UDim.new(1, 0)
+    end
+end)
+
+createSlider(185, "Aim Button Opacity", 0.5, function(value)
+    local transparency = 1 - value
+    aimTrigger.BackgroundTransparency = transparency
+    aimTrigger.TextTransparency = transparency
+    if aimTrigger:FindFirstChild("UIStroke") then
+        aimTrigger.UIStroke.Transparency = transparency + 0.1
+    end
+end)
+
+-- New FOV Position Sliders (-500 to 500 pixel range)
+createSlider(215, "FOV Horizontal (X) Offset", 0.5, function(value)
+    Settings.FOVOffsetX = (value - 0.5) * 1000 
+end)
+
+createSlider(245, "FOV Vertical (Y) Offset", 0.5, function(value)
+    Settings.FOVOffsetY = (value - 0.5) * 1000 
+end)
+
+local triggerDragging = false
+local triggerDragInput = nil
+local triggerDragStart = nil
+local triggerStartPos = nil
+local aimInputObject = nil
+
+local function isInside(pos, guiObj)
+    local tl = guiObj.AbsolutePosition
+    local br = tl + guiObj.AbsoluteSize
+    return pos.X >= tl.X and pos.X <= br.X and pos.Y >= tl.Y and pos.Y <= br.Y
+end
+
+UIS.InputBegan:Connect(function(input, gameProcessed)
+    if input.KeyCode == Enum.KeyCode.LeftShift then 
+        aiming = true 
+        return 
+    end
+
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        if isInside(input.Position, aimTrigger) then
+            aiming = true 
+            aimInputObject = input
+            
+            if not Settings.AimBtnLocked and not triggerDragging then
+                triggerDragging = true
+                triggerDragInput = input 
+                triggerDragStart = input.Position
+                triggerStartPos = aimTrigger.Position
+            end
+        end
+    end
+end)
+
+UIS.InputEnded:Connect(function(input)
+    if input.KeyCode == Enum.KeyCode.LeftShift then
+        aiming = false
+        currentTarget = nil
+    end
+    
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        if input == aimInputObject then
+            aiming = false
+            currentTarget = nil
+            aimInputObject = nil
+            
+            if input == triggerDragInput then
+                triggerDragging = false
+                triggerDragInput = nil
+            end
+        end
+    end
+end)
+
+UIS.InputChanged:Connect(function(input)
+    if triggerDragging and input == triggerDragInput and not Settings.AimBtnLocked then
+        local delta = input.Position - triggerDragStart
+        aimTrigger.Position = UDim2.new(triggerStartPos.X.Scale, triggerStartPos.X.Offset + delta.X, triggerStartPos.Y.Scale, triggerStartPos.Y.Offset + delta.Y)
+    end
+end)
+
+-- Connections
+minBtn.MouseButton1Click:Connect(function()
+    topBar.Visible = false
+    openCircle.Visible = true
+    openCircle.Position = UDim2.new(0, topBar.AbsolutePosition.X + 110, 0, topBar.AbsolutePosition.Y)
+end)
+
+openCircle.MouseButton1Click:Connect(function()
+    openCircle.Visible = false
+    topBar.Visible = true
+    topBar.Position = UDim2.new(0, openCircle.AbsolutePosition.X - 110, 0, openCircle.AbsolutePosition.Y)
+end)
+
+aimbotBtn.MouseButton1Click:Connect(function()
+    Settings.Aimbot = not Settings.Aimbot
+    aimbotBtn.Text = Settings.Aimbot and "Aimbot: ON" or "Aimbot: OFF"
+    aimbotBtn.BackgroundColor3 = Settings.Aimbot and iosBlue or glassGrey
+    aimbotBtn.BackgroundTransparency = Settings.Aimbot and 0.25 or 0.5
+end)
+
+espBtn.MouseButton1Click:Connect(function()
+    Settings.ESP = not Settings.ESP
+    espBtn.Text = Settings.ESP and "X-Ray ESP: ON" or "X-Ray ESP: OFF"
+    espBtn.BackgroundColor3 = Settings.ESP and iosBlue or glassGrey
+    espBtn.BackgroundTransparency = Settings.ESP and 0.25 or 0.5
+    
+    if not Settings.ESP then
+        for _, highlight in pairs(ESP_Objects) do
+            if highlight then highlight:Destroy() end
+        end
+        table.clear(ESP_Objects)
+    end
+end)
+
+fovBtn.MouseButton1Click:Connect(function()
+    Settings.ShowFOV = not Settings.ShowFOV
+    fovBtn.Text = Settings.ShowFOV and "Show FOV: ON" or "Show FOV: OFF"
+    fovBtn.BackgroundColor3 = Settings.ShowFOV and iosBlue or glassGrey
+    fovBtn.BackgroundTransparency = Settings.ShowFOV and 0.25 or 0.5
+    fovCircle.Visible = Settings.ShowFOV
+end)
+
+teamBtn.MouseButton1Click:Connect(function()
+    Settings.TeamCheck = not Settings.TeamCheck
+    teamBtn.Text = Settings.TeamCheck and "Team Check: ON" or "Team Check: OFF"
+    teamBtn.BackgroundColor3 = Settings.TeamCheck and glassGrey or iosBlue
+    teamBtn.BackgroundTransparency = Settings.TeamCheck and 0.5 or 0.25
+end)
+
+lockBtn.MouseButton1Click:Connect(function()
+    Settings.AimBtnLocked = not Settings.AimBtnLocked
+    lockBtn.Text = Settings.AimBtnLocked and "Lock Aim Btn: ON" or "Lock Aim Btn: OFF"
+    lockBtn.BackgroundColor3 = Settings.AimBtnLocked and iosBlue or glassGrey
+    lockBtn.BackgroundTransparency = Settings.AimBtnLocked and 0.25 or 0.5
+end)
+
+-- Bot/NPC Caching (Runs asynchronously to prevent lag)
+task.spawn(function()
+    while task.wait(1.5) do
+        local foundBots = {}
+        for _, v in pairs(Workspace:GetDescendants()) do
+            if v:IsA("Model") and v ~= player.Character then
+                local hum = v:FindFirstChildOfClass("Humanoid")
+                local root = v:FindFirstChild("HumanoidRootPart")
+                if hum and root and hum.Health > 0 then
+                    -- Verify it's not a real player
+                    if not Players:GetPlayerFromCharacter(v) then
+                        table.insert(foundBots, v)
+                    end
+                end
+            end
+        end
+        activeBots = foundBots
+    end
+end)
+
+-- Core Logic
+local function checkVisibility(targetPart)
+    if not targetPart then return false end
+    local char = player.Character
+    if not char then return false end
+    
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = {char, camera}
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.IgnoreWater = true
+    
+    local dir = (targetPart.Position - camera.CFrame.Position).Unit
+    local dist = (targetPart.Position - camera.CFrame.Position).Magnitude
+    
+    local result = Workspace:Raycast(camera.CFrame.Position, dir * dist, params)
+    
+    if not result or (result.Instance and result.Instance:IsDescendantOf(targetPart.Parent)) then
+        return true
+    end
+    return false
+end
+
+local function getBestPart(char)
+    local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("HumanoidRootPart")
+    local head = char:FindFirstChild("Head")
+    
+    if torso and checkVisibility(torso) then
+        return torso
+    elseif head and checkVisibility(head) then
+        return head 
+    end
+    
+    return nil
+end
+
+local function getClosestTarget()
+    local closestDist = Settings.FOVSize
+    local bestTargetPart = nil
+    
+    -- Custom FOV Center based on user's slider values
+    local fovCenter = Vector2.new((camera.ViewportSize.X / 2) + Settings.FOVOffsetX, (camera.ViewportSize.Y / 2) + Settings.FOVOffsetY)
+    
+    local function evaluateCharacter(char)
+        local targetPart = getBestPart(char)
+        if targetPart then
+            local screenPos, onScreen = camera:WorldToViewportPoint(targetPart.Position)
+            if onScreen then
+                local dist2D = (Vector2.new(screenPos.X, screenPos.Y) - fovCenter).Magnitude
+                if dist2D <= Settings.FOVSize and dist2D < closestDist then
+                    closestDist = dist2D
+                    bestTargetPart = targetPart
+                end
+            end
+        end
+    end
+
+    -- 1. Check Real Players
+    for _, v in pairs(Players:GetPlayers()) do
+        if v ~= player and v.Character and v.Character:FindFirstChild("Humanoid") then
+            if v.Character.Humanoid.Health > 0 then
+                if Settings.TeamCheck and v.Team == player.Team then continue end
+                evaluateCharacter(v.Character)
+            end
+        end
+    end
+    
+    -- 2. Check NPCs/Bots
+    for _, botChar in pairs(activeBots) do
+        if botChar and botChar:FindFirstChild("Humanoid") and botChar.Humanoid.Health > 0 then
+            evaluateCharacter(botChar)
+        end
+    end
+
+    return bestTargetPart
+end
+
+RunService.RenderStepped:Connect(function()
+    rgbGradient.Rotation = (rgbGradient.Rotation + 2) % 360
+    
+    if Settings.ShowFOV then
+        fovCircle.Position = UDim2.new(0, (camera.ViewportSize.X / 2) + Settings.FOVOffsetX, 0, (camera.ViewportSize.Y / 2) + Settings.FOVOffsetY)
+    end
+    
+    if Settings.Aimbot and aiming then
+        if not currentTarget or not currentTarget.Parent or currentTarget.Parent.Humanoid.Health <= 0 or not checkVisibility(currentTarget) then
+            currentTarget = getClosestTarget()
+        end
+        
+        if currentTarget then
+            camera.CFrame = CFrame.new(camera.CFrame.Position, currentTarget.Position)
+        end
+    else
+        currentTarget = nil
+    end
+    
+    if Settings.ESP then
+        local entitiesToRender = {}
+
+        -- Draw Player ESP
+        for _, v in pairs(Players:GetPlayers()) do
+            if v ~= player and v.Character and v.Character:FindFirstChild("HumanoidRootPart") and v.Character.Humanoid.Health > 0 then
+                if Settings.TeamCheck and v.Team == player.Team then continue end
+                
+                local char = v.Character
+                entitiesToRender[char] = true
+                
+                if not ESP_Objects[char] then
+                    local highlight = Instance.new("Highlight")
+                    highlight.Parent = CoreGui
+                    highlight.Adornee = char
+                    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                    highlight.FillTransparency = 0.5
+                    highlight.OutlineTransparency = 0
+                    ESP_Objects[char] = highlight
+                end
+                
+                local highlight = ESP_Objects[char]
+                if getBestPart(char) then
+                    highlight.FillColor = Color3.fromRGB(255, 0, 0) 
+                    highlight.OutlineColor = Color3.fromRGB(255, 0, 0)
+                else
+                    highlight.FillColor = Color3.fromRGB(0, 255, 0) 
+                    highlight.OutlineColor = Color3.fromRGB(0, 255, 0)
+                end
+            end
+        end
+
+        -- Draw Bot ESP (Blue)
+        for _, botChar in pairs(activeBots) do
+            if botChar and botChar.Parent and botChar:FindFirstChild("HumanoidRootPart") and botChar:FindFirstChildOfClass("Humanoid") and botChar.Humanoid.Health > 0 then
+                entitiesToRender[botChar] = true
+                
+                if not ESP_Objects[botChar] then
+                    local highlight = Instance.new("Highlight")
+                    highlight.Parent = CoreGui
+                    highlight.Adornee = botChar
+                    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                    highlight.FillTransparency = 0.5
+                    highlight.OutlineTransparency = 0
+                    highlight.FillColor = iosBlue
+                    highlight.OutlineColor = iosBlue
+                    ESP_Objects[botChar] = highlight
+                end
+            end
+        end
+
+        -- Clean up dead characters or bots that despawned
+        for char, highlight in pairs(ESP_Objects) do
+            if not entitiesToRender[char] then
+                highlight:Destroy()
+                ESP_Objects[char] = nil
+            end
+        end
+    end
+end)
